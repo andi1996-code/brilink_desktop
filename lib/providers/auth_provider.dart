@@ -197,11 +197,16 @@ class AuthProvider extends ChangeNotifier {
     // Clear local session regardless of server response
     user = null;
     token = null;
-    lastUsedBaseUrl = null;
+    // Preserve lastUsedBaseUrl so the user doesn't need to re-enter server URL
     try {
-      final file = await _getSessionFile();
-      if (await file.exists()) await file.delete();
-    } catch (_) {}
+      await _saveSession();
+    } catch (e) {
+      // If saving fails for some reason, fallback to deleting the session file
+      try {
+        final file = await _getSessionFile();
+        if (await file.exists()) await file.delete();
+      } catch (_) {}
+    }
 
     isLoading = false;
     notifyListeners();

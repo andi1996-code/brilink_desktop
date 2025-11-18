@@ -28,6 +28,7 @@ class TransactionController {
   List<Map<String, dynamic>> serviceFees = [];
   List<Map<String, dynamic>> bankFees = [];
   Map<String, dynamic>? dashboard;
+  double uangMasuk = 0.0;
 
   // Pagination info
   int transactionsTotal = 0;
@@ -41,6 +42,7 @@ class TransactionController {
   bool isLoadingDashboard = true;
   bool isLoadingServiceFees = true;
   bool isLoadingBankFees = true;
+  bool isLoadingUangMasuk = true;
 
   // Form data
   String selectedMachine = '-- Pilih Mesin --';
@@ -374,10 +376,37 @@ class TransactionController {
     }
 
     isLoadingDashboard = false;
+    // After loading dashboard, also attempt to load uang masuk
+    await loadUangMasuk();
     // Notify UI to update
     if (_isMounted) {
       // This will trigger a rebuild in the UI
     }
+  }
+
+  /// Load amount of uang masuk (transfer only) for cashier
+  Future<void> loadUangMasuk() async {
+    try {
+      final authProvider = Provider.of<AuthProvider>(context, listen: false);
+      await authProvider.ensureSessionLoaded();
+
+      final token = authProvider.token;
+      final resp = await _api.fetchUangMasuk(token: token);
+      final responseData = resp.data;
+
+      if (responseData is Map) {
+        final dataMap = responseData['data'] as Map<String, dynamic>?;
+        final total =
+            dataMap?['total_transfer'] ?? responseData['total_transfer'];
+        uangMasuk = CurrencyFormatter.parseAmountWithoutDecimals(total);
+      } else {
+        uangMasuk = 0.0;
+      }
+    } catch (e) {
+      uangMasuk = 0.0;
+    }
+
+    isLoadingUangMasuk = false;
   }
 
   void onNominalInput(VoidCallback onStateChanged) {

@@ -402,14 +402,13 @@ class _TransactionScreenState extends State<TransactionScreen> {
                           icon: Icons.sync_alt,
                         ),
                         const SizedBox(width: 12),
-                        // New card: Uang Tunai Masuk (sama dengan total_transfer_via_edc)
+                        // New card: Uang Tunai Masuk (sourced from /api/cashier/uangmasuk)
                         DashboardSummaryCard(
                           title: 'Uang Tunai Masuk',
-                          value: _controller.isLoadingDashboard
+                          value: _controller.isLoadingUangMasuk
                               ? '...'
                               : CurrencyFormatter.formatCurrencyNoDecimals(
-                                  _controller
-                                      .dashboard?['total_transfer_via_edc'],
+                                  _controller.uangMasuk,
                                 ),
                           color: AppColors.briBlue,
                           icon: Icons.attach_money,

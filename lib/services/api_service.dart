@@ -186,6 +186,19 @@ class ApiService {
     return _dio.get(path, queryParameters: query, options: options);
   }
 
+  /// Fetch uang masuk (transfer only) for the cashier dashboard
+  Future<Response> fetchUangMasuk({String? token}) async {
+    final options = token != null
+        ? Options(
+            headers: {
+              'Accept': 'application/json',
+              'Authorization': 'Bearer $token',
+            },
+          )
+        : Options(headers: {'Accept': 'application/json'});
+    return _dio.get('/api/cashier/uangmasuk', options: options);
+  }
+
   /// Fetch dashboard cashier summary
   Future<Response> fetchDashboardCashier({String? token}) async {
     final options = token != null
