@@ -1,0 +1,1834 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:provider/provider.dart';
+import '../app_colors.dart';
+import '../widgets/custom_app_bar.dart';
+import '../widgets/custom_sukses_dialog.dart';
+import '../services/api_service.dart';
+import '../providers/auth_provider.dart';
+import 'print_setting_screen.dart'; // Tambahkan import untuk halaman pengaturan printer
+import '../controller/printer_controller.dart';
+
+class TransactionScreen extends StatefulWidget {
+  const TransactionScreen({Key? key}) : super(key: key);
+
+  @override
+  _TransactionScreenState createState() => _TransactionScreenState();
+}
+
+class _TransactionScreenState extends State<TransactionScreen> {
+  final ApiService _api = ApiService();
+  List<Map<String, dynamic>> _edcMachines = [];
+  bool _isLoadingMachines = true;
+  // Services list loaded from API
+  List<Map<String, dynamic>> _services = [];
+  bool _isLoadingServices = true;
+  // Transactions list loaded from API
+  List<Map<String, dynamic>> _transactions = [];
+  bool _isLoadingTransactions = true;
+  // Service fees fetched from API
+  String _serviceFeeDisplay = 'Rp0';
+  String _bankFeeDisplay = 'Rp0';
+  // Formatting control for nominal input
+  bool _isFormattingNominal = false;
+  // Formatting control for custom fee inputs
+  // ignore: unused_field
+  bool _isFormattingServiceFee = false;
+  // ignore: unused_field
+  bool _isFormattingBankFee = false;
+  // selected machine id for API calls
+  dynamic selectedMachineId;
+  // Real-time clock
+  String _currentTime = '';
+  Timer? _timer;
+  // Debounce timer for API calls
+  Timer? _debounceTimer;
+
+  String selectedMachine = '-- Pilih Mesin --';
+  String selectedService = '-- Pilih Layanan --';
+  final nominalController = TextEditingController(text: '0');
+  // Additional form controllers
+  final tambahanController = TextEditingController(text: '0');
+  final customerNameController = TextEditingController();
+  final destinationNumberController = TextEditingController();
+  final keteranganController = TextEditingController();
+  // Fee display controllers (editable, store numeric string without prefix)
+  final serviceFeeController = TextEditingController(text: '0');
+  final bankFeeController = TextEditingController(text: '0');
+  final totalFeesController = TextEditingController(text: 'Rp0');
+
+  Map<String, dynamic>? _dashboard;
+  bool _isLoadingDashboard = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _updateTime();
+    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      _updateTime();
+    });
+
+    // Load essential data first
+    _loadEdcMachines();
+    _loadServices();
+    _loadTransactions();
+    nominalController.addListener(_onNominalInput);
+    tambahanController.addListener(_onTambahanInput);
+    _loadDashboard();
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    _debounceTimer?.cancel();
+    nominalController.removeListener(_onNominalInput);
+    tambahanController.removeListener(_onTambahanInput);
+    nominalController.dispose();
+    tambahanController.dispose();
+    customerNameController.dispose();
+    destinationNumberController.dispose();
+    keteranganController.dispose();
+    serviceFeeController.dispose();
+    bankFeeController.dispose();
+    totalFeesController.dispose();
+    super.dispose();
+  }
+
+  void _updateTime() {
+    final now = DateTime.now();
+    setState(() {
+      _currentTime =
+          '${now.day.toString().padLeft(2, '0')}/${now.month.toString().padLeft(2, '0')}/${now.year} ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}:${now.second.toString().padLeft(2, '0')}';
+    });
+  }
+
+  Future<void> _loadEdcMachines() async {
+    try {
+      final token = Provider.of<AuthProvider>(context, listen: false).token;
+      final resp = await _api.fetchEdcMachines(token: token);
+      final responseData = resp.data;
+      debugPrint('EDC fetch response: $responseData');
+      List<dynamic> list = [];
+
+      // Support two response shapes:
+      // 1) API returns a JSON array (List)
+      // 2) API returns { success: true, data: [...] }
+      if (responseData is List) {
+        list = responseData;
+      } else if (responseData is Map) {
+        if (responseData['data'] is List) {
+          list = responseData['data'] as List<dynamic>;
+        } else if (responseData['success'] == true &&
+            responseData['data'] is List) {
+          list = responseData['data'] as List<dynamic>;
+        }
+      }
+
+      // Normalize into List<Map<String, dynamic>>
+      _edcMachines = list.map((e) {
+        if (e is Map) {
+          return Map<String, dynamic>.from(e.cast<String, dynamic>());
+        }
+        return {'name': e.toString()};
+      }).toList();
+    } catch (e) {
+      debugPrint('Error fetching EDC machines: $e');
+    }
+
+    if (!mounted) return;
+    setState(() => _isLoadingMachines = false);
+  }
+
+  Future<void> _loadServices() async {
+    try {
+      final token = Provider.of<AuthProvider>(context, listen: false).token;
+      final resp = await _api.fetchServices(token: token);
+      final responseData = resp.data;
+      debugPrint('Services fetch response: $responseData');
+      List<dynamic> list = [];
+
+      if (responseData is List) {
+        list = responseData;
+      } else if (responseData is Map) {
+        if (responseData['data'] is List) {
+          list = responseData['data'] as List<dynamic>;
+        }
+      }
+
+      _services = list.map((e) {
+        if (e is Map) {
+          return Map<String, dynamic>.from(e.cast<String, dynamic>());
+        }
+        return {'name': e.toString()};
+      }).toList();
+    } catch (e) {
+      debugPrint('Error fetching services: $e');
+    }
+
+    if (!mounted) return;
+    setState(() => _isLoadingServices = false);
+  }
+
+  Future<void> _loadTransactions() async {
+    try {
+      final token = Provider.of<AuthProvider>(context, listen: false).token;
+      final resp = await _api.fetchTransactions(token: token);
+      final responseData = resp.data;
+      debugPrint('Transactions fetch response: $responseData');
+
+      List<dynamic> list = [];
+      if (responseData is List) {
+        list = responseData;
+      } else if (responseData is Map && responseData['data'] is List) {
+        list = responseData['data'] as List<dynamic>;
+      }
+
+      _transactions = list.map((e) {
+        if (e is Map) {
+          return Map<String, dynamic>.from(e.cast<String, dynamic>());
+        }
+        return <String, dynamic>{};
+      }).toList();
+    } catch (e) {
+      debugPrint('Error fetching transactions: $e');
+    }
+
+    if (!mounted) return;
+    setState(() => _isLoadingTransactions = false);
+  }
+
+  Future<void> _loadDashboard() async {
+    try {
+      final token = Provider.of<AuthProvider>(context, listen: false).token;
+      final resp = await _api.fetchDashboardCashier(token: token);
+      final data = resp.data;
+      if (data is Map<String, dynamic>) {
+        _dashboard = data;
+      }
+    } catch (e) {
+      debugPrint('Error fetching dashboard: $e');
+    }
+    if (!mounted) return;
+    setState(() => _isLoadingDashboard = false);
+  }
+
+  void _onNominalInput() {
+    if (_isFormattingNominal) return;
+    final raw = nominalController.text;
+    // keep only digits
+    final digits = raw.replaceAll(RegExp(r'[^0-9]'), '');
+    if (digits.isEmpty) {
+      _isFormattingNominal = true;
+      nominalController.text = '0';
+      nominalController.selection = TextSelection.collapsed(
+        offset: nominalController.text.length,
+      );
+      _isFormattingNominal = false;
+      _debouncedComputeServiceFee();
+      return;
+    }
+    final value = double.tryParse(digits) ?? 0.0;
+    final formatted = _formatNumberNoDecimals(value);
+    _isFormattingNominal = true;
+    nominalController.text = formatted;
+    nominalController.selection = TextSelection.collapsed(
+      offset: nominalController.text.length,
+    );
+    _isFormattingNominal = false;
+    _debouncedComputeServiceFee();
+  }
+
+  void _onTambahanInput() {
+    // Only trigger recalculation if we have valid service and nominal
+    final raw = nominalController.text;
+    final cleaned = raw.replaceAll(RegExp(r'[^0-9]'), '');
+    final nominal = double.tryParse(cleaned) ?? 0.0;
+
+    final service = _services.firstWhere(
+      (s) => (s['name'] ?? '').toString() == selectedService,
+      orElse: () => {},
+    );
+
+    if (service.isNotEmpty && nominal > 0) {
+      _debouncedComputeServiceFee();
+    } else {
+      // Just update total biaya without calling API
+      _updateTotalBiaya();
+    }
+  }
+
+  String _formatNumberNoDecimals(double value) {
+    final intVal = value.round();
+    final s = intVal.toString();
+    // insert dot as thousand separator
+    return s.replaceAllMapped(RegExp(r"\B(?=(\d{3})+(?!\d))"), (m) => '.');
+  }
+
+  // Parse numeric value from JSON fields and drop any fractional part (remove .00)
+  double _parseAmountWithoutDecimals(dynamic v) {
+    if (v == null) return 0.0;
+    if (v is num) return v.toDouble().roundToDouble();
+    var s = v.toString();
+    // remove thousands separators like commas
+    s = s.replaceAll(',', '');
+    // if has decimal point, drop fractional part
+    if (s.contains('.')) {
+      s = s.split('.').first;
+    }
+    // keep only digits and optional minus
+    s = s.replaceAll(RegExp(r'[^0-9\-]'), '');
+    return double.tryParse(s) ?? 0.0;
+  }
+
+  // Format any dynamic amount as Rupiah without decimals
+  String _formatCurrencyNoDecimals(dynamic v) {
+    final amount = _parseAmountWithoutDecimals(v).round();
+    final s = amount.toString();
+    final formatted = s.replaceAllMapped(
+      RegExp(r"\B(?=(\d{3})+(?!\d))"),
+      (m) => '.',
+    );
+    return 'Rp$formatted';
+  }
+
+  void _updateTotalBiaya() {
+    // Parse current values
+    final raw = nominalController.text;
+    final cleaned = raw.replaceAll(RegExp(r'[^0-9]'), '');
+    final nominal = double.tryParse(cleaned) ?? 0.0;
+
+    final extraRaw = tambahanController.text;
+    final extraCleaned = extraRaw.replaceAll(RegExp(r'[^0-9]'), '');
+    final extraFee = double.tryParse(extraCleaned) ?? 0.0;
+
+    // Use controller values for editable fees
+    final serviceFeeNum = _parseAmountWithoutDecimals(
+      serviceFeeController.text,
+    );
+    final bankFeeNum = _parseAmountWithoutDecimals(bankFeeController.text);
+
+    final totalNum = nominal + bankFeeNum + serviceFeeNum + extraFee;
+
+    // Only update controller - no need for separate display variable
+    totalFeesController.text = _formatCurrencyNoDecimals(totalNum);
+  }
+
+  void _debouncedComputeServiceFee() {
+    _debounceTimer?.cancel();
+    _debounceTimer = Timer(const Duration(milliseconds: 300), () {
+      _computeServiceFee();
+    });
+  }
+
+  void _onServiceChanged(String? v) {
+    if (v == null) return;
+    setState(() => selectedService = v);
+    _debouncedComputeServiceFee();
+  }
+
+  void _onMachineChanged(String? v) {
+    if (v == null) return;
+    setState(() {
+      selectedMachine = v;
+      final found = _edcMachines.firstWhere(
+        (m) => (m['name'] ?? '').toString() == v,
+        orElse: () => <String, dynamic>{},
+      );
+      selectedMachineId = found.isNotEmpty ? found['id'] : null;
+    });
+    _debouncedComputeServiceFee();
+  }
+
+  Future<void> _computeServiceFee() async {
+    // Cancel any previous debounce timer
+    _debounceTimer?.cancel();
+
+    // parse nominal safely (remove dots and non-digits)
+    final raw = nominalController.text;
+    final cleaned = raw.replaceAll(RegExp(r'[^0-9]'), '');
+    final nominal = double.tryParse(cleaned) ?? 0.0;
+
+    // find service id by name
+    final service = _services.firstWhere(
+      (s) => (s['name'] ?? '').toString() == selectedService,
+      orElse: () => {},
+    );
+
+    // require a valid service selection and a positive nominal to call server
+    if (service.isEmpty || nominal <= 0) {
+      // Calculate total with current tambahan even when no service/nominal
+      final extraRaw = tambahanController.text;
+      final extraCleaned = extraRaw.replaceAll(RegExp(r'[^0-9]'), '');
+      final extraFee = double.tryParse(extraCleaned) ?? 0.0;
+
+      if (mounted) {
+        setState(() {
+          _serviceFeeDisplay = 'Rp0';
+          _bankFeeDisplay = 'Rp0';
+
+          // Update controllers in setState
+          serviceFeeController.text = 'Rp0';
+          bankFeeController.text = 'Rp0';
+          totalFeesController.text = _formatCurrencyNoDecimals(
+            nominal + extraFee,
+          );
+        });
+      }
+      return;
+    }
+
+    final serviceId = service['id'];
+
+    try {
+      final token = Provider.of<AuthProvider>(context, listen: false).token;
+
+      final resp = await _api.calculateFee(
+        serviceId: serviceId,
+        amount: nominal.toInt(),
+        edcMachineId: selectedMachineId,
+        token: token,
+      );
+
+      if (!mounted) return;
+
+      final data = resp.data ?? {};
+      final serviceFeeNum = _parseAmountWithoutDecimals(data['service_fee']);
+      final bankFeeNum = _parseAmountWithoutDecimals(data['bank_fee']);
+
+      // Calculate total biaya = nominal + biaya admin bank + biaya layanan + biaya tambahan
+      final extraRaw = tambahanController.text;
+      final extraCleaned = extraRaw.replaceAll(RegExp(r'[^0-9]'), '');
+      final extraFee = double.tryParse(extraCleaned) ?? 0.0;
+
+      final totalNum = nominal + bankFeeNum + serviceFeeNum + extraFee;
+
+      final newServiceFeeNumber = _formatNumberNoDecimals(serviceFeeNum);
+      final newBankFeeNumber = _formatNumberNoDecimals(bankFeeNum);
+      final newTotalFeesDisplay = _formatCurrencyNoDecimals(totalNum);
+      // Update state and controllers
+      setState(() {
+        _serviceFeeDisplay = 'Rp$newServiceFeeNumber';
+        _bankFeeDisplay = 'Rp$newBankFeeNumber';
+        serviceFeeController.text = newServiceFeeNumber;
+        bankFeeController.text = newBankFeeNumber;
+        totalFeesController.text = newTotalFeesDisplay;
+      });
+
+      return;
+    } catch (e) {
+      if (!mounted) return;
+
+      // Even on error, calculate total with current values
+      final extraRaw = tambahanController.text;
+      final extraCleaned = extraRaw.replaceAll(RegExp(r'[^0-9]'), '');
+      final extraFee = double.tryParse(extraCleaned) ?? 0.0;
+
+      setState(() {
+        _serviceFeeDisplay = 'Rp0';
+        _bankFeeDisplay = 'Rp0';
+
+        // Update controllers in setState
+        serviceFeeController.text = 'Rp0';
+        bankFeeController.text = 'Rp0';
+        totalFeesController.text = _formatCurrencyNoDecimals(
+          nominal + extraFee,
+        );
+      });
+      return;
+    }
+  }
+
+  Future<void> _createTransaction() async {
+    try {
+      // Validate required fields
+      if (selectedMachine == '-- Pilih Mesin --') {
+        _showErrorDialog('Pilih mesin EDC terlebih dahulu');
+        return;
+      }
+
+      if (selectedService == '-- Pilih Layanan --') {
+        _showErrorDialog('Pilih jenis layanan terlebih dahulu');
+        return;
+      }
+
+      // Parse nominal
+      final raw = nominalController.text;
+      final cleaned = raw.replaceAll(RegExp(r'[^0-9]'), '');
+      final nominal = double.tryParse(cleaned) ?? 0.0;
+
+      if (nominal <= 0) {
+        _showErrorDialog('Masukkan nominal yang valid');
+        return;
+      }
+
+      // Parse extra fee (biaya tambahan)
+      final extraRaw = tambahanController.text;
+      final extraCleaned = extraRaw.replaceAll(RegExp(r'[^0-9]'), '');
+      final extraFee = double.tryParse(extraCleaned) ?? 0.0;
+
+      // Get service and machine IDs
+      final service = _services.firstWhere(
+        (s) => (s['name'] ?? '').toString() == selectedService,
+        orElse: () => {},
+      );
+
+      if (service.isEmpty) {
+        _showErrorDialog('Service tidak ditemukan');
+        return;
+      }
+
+      final serviceId = service['id'];
+      final machineId = selectedMachineId;
+
+      if (machineId == null) {
+        _showErrorDialog('Mesin EDC tidak ditemukan');
+        return;
+      }
+
+      // Parse fees from display
+      final serviceFeeNum = _parseAmountWithoutDecimals(
+        _serviceFeeDisplay.replaceAll('Rp', ''),
+      );
+      final bankFeeNum = _parseAmountWithoutDecimals(
+        _bankFeeDisplay.replaceAll('Rp', ''),
+      );
+
+      // Get auth data
+      final authProvider = Provider.of<AuthProvider>(context, listen: false);
+      final token = authProvider.token;
+      final userId = authProvider.user?['id'] ?? 1; // fallback to user ID 1
+
+      debugPrint('=== CREATE TRANSACTION DEBUG ===');
+      debugPrint('- edcMachineId: $machineId');
+      debugPrint('- serviceId: $serviceId');
+      debugPrint('- userId: $userId');
+      debugPrint('- amount: ${nominal.toInt()}');
+      debugPrint('- serviceFee: $serviceFeeNum');
+      debugPrint('- extraFee: $extraFee');
+      debugPrint('- bankFee: $bankFeeNum');
+      debugPrint('- referenceNumber: ${destinationNumberController.text}');
+      debugPrint('- customerName: ${customerNameController.text}');
+
+      final resp = await _api.createTransaction(
+        edcMachineId: machineId,
+        serviceId: serviceId,
+        userId: userId,
+        amount: nominal.toInt(),
+        serviceFee: serviceFeeNum,
+        extraFee: extraFee,
+        bankFee: bankFeeNum,
+        referenceNumber: destinationNumberController.text.trim(),
+        customerName: customerNameController.text.trim(),
+        token: token,
+      );
+
+      debugPrint('Transaction created successfully: ${resp.data}');
+
+      // Close modal first
+      Navigator.of(context).pop();
+
+      // Show success dialog with print capability
+      final transactionData = resp.data;
+      final transactionNumber = transactionData?['transaction_number'] ?? '';
+
+      // Calculate total amount (same as form calculation)
+      final totalAmount = nominal + bankFeeNum + serviceFeeNum + extraFee;
+      final totalAmountFormatted = _formatCurrencyNoDecimals(
+        totalAmount.toInt(),
+      );
+
+      // Prepare complete transaction data for printing
+      final completeTransactionData = Map<String, dynamic>.from({
+        ...transactionData ?? {},
+        'amount': nominal.toInt(),
+        'service_fee': serviceFeeNum.toInt(),
+        'bank_fee': bankFeeNum.toInt(),
+        'extra_fee': extraFee.toInt(),
+        'customer_name': customerNameController.text.trim(),
+        'reference_number': destinationNumberController.text.trim(),
+        'created_at': DateTime.now().toIso8601String(),
+        'service': {'name': selectedService},
+        'edc_machine': {'name': selectedMachine},
+        'user': authProvider.user ?? {'name': 'Nina'},
+      });
+
+      CustomSuksesDialog.show(
+        context: context,
+        title: 'Transaksi Berhasil!',
+        message: 'Transaksi Anda telah berhasil diproses.',
+        transactionNumber: transactionNumber,
+        amount: totalAmountFormatted,
+        transactionData: completeTransactionData,
+
+        onClose: () {
+          // Reset form and reload transactions after dialog is closed
+          _resetForm();
+          _loadTransactions();
+        },
+        onPrint: () async {
+          // Load printer name from settings file
+          try {
+            final dir = await getApplicationDocumentsDirectory();
+            final file = File('${dir.path}/BRILink/printer_settings.json');
+            String name = '';
+            if (await file.exists()) {
+              final data =
+                  jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+              name = data['printer_name'] as String? ?? '';
+            }
+            if (name.isNotEmpty) {
+              final controller = PrinterController(printerName: name);
+              final ok = await controller.printTransaction(
+                completeTransactionData,
+              );
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(ok ? 'Print berhasil' : 'Gagal print'),
+                  ),
+                );
+              }
+            }
+          } catch (e) {
+            if (context.mounted) {
+              ScaffoldMessenger.of(
+                context,
+              ).showSnackBar(SnackBar(content: Text('Error print: $e')));
+            }
+          }
+        },
+      );
+    } catch (e) {
+      debugPrint('Create transaction error: $e');
+      _showErrorDialog('Gagal membuat transaksi: $e');
+    }
+  }
+
+  void _showErrorDialog(String message) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Error'),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _resetForm() {
+    setState(() {
+      selectedMachine = '-- Pilih Mesin --';
+      selectedService = '-- Pilih Layanan --';
+      selectedMachineId = null;
+      nominalController.text = '0';
+      tambahanController.text = '0';
+      customerNameController.clear();
+      destinationNumberController.clear();
+      keteranganController.clear();
+      _serviceFeeDisplay = 'Rp0';
+      _bankFeeDisplay = 'Rp0';
+    });
+
+    // Reset fee controllers (editable numeric values)
+    serviceFeeController.text = '0';
+    bankFeeController.text = '0';
+    totalFeesController.text = 'Rp0';
+  }
+
+  // Printer methods
+
+  void _showTransactionFormModal() {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            return Dialog(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Container(
+                width: MediaQuery.of(context).size.width * 0.8,
+                height: MediaQuery.of(context).size.height * 0.9,
+                child: Column(
+                  children: [
+                    // Modal Header
+                    Container(
+                      padding: const EdgeInsets.all(20),
+                      decoration: BoxDecoration(
+                        color: AppColors.briBlue,
+                        borderRadius: const BorderRadius.only(
+                          topLeft: Radius.circular(16),
+                          topRight: Radius.circular(16),
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.receipt_long,
+                            color: Colors.white,
+                            size: 24,
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              'Form Transaksi Baru',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 20,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                          IconButton(
+                            onPressed: () => Navigator.of(context).pop(),
+                            icon: const Icon(Icons.close, color: Colors.white),
+                          ),
+                        ],
+                      ),
+                    ),
+                    // Modal Content
+                    Expanded(
+                      child: Padding(
+                        padding: const EdgeInsets.all(20),
+                        child: SingleChildScrollView(
+                          child: _buildTransactionFormContent(),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: CustomAppBar(
+        title: 'Dashboard Transaksi BRILink',
+        showSearch: false,
+        actions: [
+          IconButton(
+            onPressed: () {},
+            icon: const Icon(Icons.download, color: Colors.white),
+            tooltip: 'Export',
+          ),
+          IconButton(
+            onPressed: () {
+              _loadTransactions();
+              _loadEdcMachines();
+            },
+            icon: const Icon(Icons.refresh, color: Colors.white),
+            tooltip: 'Refresh Data',
+          ),
+          IconButton(
+            onPressed: () {
+              showDialog(
+                context: context,
+                builder: (context) => Dialog(
+                  insetPadding: const EdgeInsets.all(16),
+                  backgroundColor: Colors.transparent,
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(24), // lebih rounded
+                    child: Container(
+                      width: MediaQuery.of(context).size.width * 0.4,
+                      height: MediaQuery.of(context).size.height * 0.8,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: AppColors.briBlue, width: 2),
+                      ),
+                      child: PrinterSettingsPage(),
+                    ),
+                  ),
+                ),
+              );
+            },
+            icon: const Icon(Icons.print, color: Colors.white),
+            tooltip: 'Konfigurasi Printer',
+          ),
+        ],
+        onLogout: () {
+          Provider.of<AuthProvider>(context, listen: false).logout();
+          Navigator.pushReplacementNamed(context, '/login');
+        },
+      ),
+      body: Container(
+        color: AppColors.briDarkBlue,
+        padding: const EdgeInsets.all(16),
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Summary cards centered
+              Container(
+                height: 110,
+                child: Center(
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _buildSummaryCard(
+                          'Transaksi Hari Ini',
+                          _isLoadingDashboard
+                              ? '...'
+                              : _dashboard?['total_transactions_today']
+                                        ?.toString() ??
+                                    '0',
+                          AppColors.briBlue,
+                          Icons.receipt_long,
+                        ),
+                        const SizedBox(width: 12),
+                        _buildSummaryCard(
+                          'Kas Tunai Keluar',
+                          _isLoadingDashboard
+                              ? '...'
+                              : _formatCurrencyNoDecimals(
+                                  _dashboard?['cash_out_today'],
+                                ),
+                          AppColors.briDarkBlue,
+                          Icons.money_off,
+                        ),
+                        const SizedBox(width: 12),
+                        _buildSummaryCard(
+                          'Total Transfer via EDC',
+                          _isLoadingDashboard
+                              ? '...'
+                              : _formatCurrencyNoDecimals(
+                                  _dashboard?['total_edc_transfer_amount'],
+                                ),
+                          AppColors.briBlue,
+                          Icons.sync_alt,
+                        ),
+                        const SizedBox(width: 12),
+                        _buildSummaryCard(
+                          'Kas Tunai di Tangan',
+                          _isLoadingDashboard
+                              ? '...'
+                              : _formatCurrencyNoDecimals(
+                                  _dashboard?['cash_on_hand_today'],
+                                ),
+                          AppColors.briBlue,
+                          Icons.account_balance_wallet,
+                        ),
+                        const SizedBox(width: 12),
+                        _buildSummaryCard(
+                          'Total Fee Hari Ini',
+                          _isLoadingDashboard
+                              ? '...'
+                              : _formatCurrencyNoDecimals(
+                                  _dashboard?['total_fees_today'],
+                                ),
+                          AppColors.briBlue,
+                          Icons.paid,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 24),
+              // Button to show transaction form modal
+              Center(
+                child: ElevatedButton.icon(
+                  onPressed: _showTransactionFormModal,
+                  icon: const Icon(Icons.add),
+                  label: const Text('Buat Transaksi Baru'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.briBlue,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 32,
+                      vertical: 16,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    elevation: 4,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 24),
+              // Transaction List - Full width
+              _buildTransactionList(),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTransactionFormContent() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 16),
+        // Row 1: Tanggal & Waktu and Kasir
+        Row(
+          children: [
+            Expanded(
+              child: _buildReadOnlyField(
+                'Tanggal & Waktu',
+                _currentTime,
+                Icons.calendar_today,
+              ),
+            ),
+            const SizedBox(width: 16),
+            Expanded(child: _buildReadOnlyField('Kasir', 'Nina', Icons.person)),
+          ],
+        ),
+        const SizedBox(height: 16),
+
+        // Row 2: Mesin EDC and Jenis Layanan
+        Row(
+          children: [
+            Expanded(
+              child: _isLoadingMachines
+                  ? const Center(child: CircularProgressIndicator())
+                  : _buildDropdown(
+                      value: selectedMachine,
+                      items: [
+                        '-- Pilih Mesin --',
+                        ..._edcMachines.map(
+                          (m) => (m['name'] ?? '').toString(),
+                        ),
+                      ],
+                      label: 'Mesin EDC',
+                      icon: Icons.point_of_sale,
+                      onChanged: _onMachineChanged,
+                    ),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: _isLoadingServices
+                  ? const Center(child: CircularProgressIndicator())
+                  : _buildDropdown(
+                      value: selectedService,
+                      items: [
+                        '-- Pilih Layanan --',
+                        ..._services.map((s) => (s['name'] ?? '').toString()),
+                      ],
+                      label: 'Jenis Layanan',
+                      icon: Icons.category,
+                      onChanged: _onServiceChanged,
+                    ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+
+        // Row 3: Nominal and Biaya Tambahan
+        Row(
+          children: [
+            Expanded(
+              child: TextFormField(
+                controller: nominalController,
+                keyboardType: TextInputType.number,
+                decoration: InputDecoration(
+                  labelText: 'Nominal',
+                  prefixText: 'Rp ',
+                  prefixStyle: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Colors.grey[700],
+                  ),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: BorderSide(color: AppColors.briBlue, width: 2),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: TextFormField(
+                controller: tambahanController,
+                keyboardType: TextInputType.number,
+                onChanged: (value) {
+                  // Format biaya tambahan dengan thousand separator
+                  final digits = value.replaceAll(RegExp(r'[^0-9]'), '');
+                  if (digits.isEmpty) {
+                    tambahanController.text = '0';
+                    tambahanController.selection = TextSelection.collapsed(
+                      offset: tambahanController.text.length,
+                    );
+                  } else {
+                    final numValue = double.tryParse(digits) ?? 0.0;
+                    final formatted = _formatNumberNoDecimals(numValue);
+                    tambahanController.text = formatted;
+                    tambahanController.selection = TextSelection.collapsed(
+                      offset: tambahanController.text.length,
+                    );
+                  }
+                },
+                decoration: InputDecoration(
+                  labelText: 'Biaya Tambahan',
+                  prefixText: 'Rp ',
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+
+        // Row 4: Biaya Layanan dan Biaya Admin Bank (editable)
+        Row(
+          children: [
+            Expanded(
+              child: TextFormField(
+                controller: serviceFeeController,
+                keyboardType: TextInputType.number,
+                onChanged: (value) {
+                  if (_isFormattingServiceFee) return;
+                  final digits = value.replaceAll(RegExp(r'[^0-9]'), '');
+                  _isFormattingServiceFee = true;
+                  final formatted = digits.isEmpty
+                      ? '0'
+                      : _formatNumberNoDecimals(double.tryParse(digits) ?? 0.0);
+                  setState(() {
+                    serviceFeeController.text = formatted;
+                    serviceFeeController.selection = TextSelection.collapsed(
+                      offset: formatted.length,
+                    );
+                    _serviceFeeDisplay = 'Rp$formatted';
+                  });
+                  _isFormattingServiceFee = false;
+                  _updateTotalBiaya();
+                },
+                decoration: InputDecoration(
+                  labelText: 'Biaya Layanan',
+                  prefixText: 'Rp ',
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: TextFormField(
+                controller: bankFeeController,
+                keyboardType: TextInputType.number,
+                onChanged: (value) {
+                  if (_isFormattingBankFee) return;
+                  final digits = value.replaceAll(RegExp(r'[^0-9]'), '');
+                  _isFormattingBankFee = true;
+                  final formatted = digits.isEmpty
+                      ? '0'
+                      : _formatNumberNoDecimals(double.tryParse(digits) ?? 0.0);
+                  setState(() {
+                    bankFeeController.text = formatted;
+                    bankFeeController.selection = TextSelection.collapsed(
+                      offset: formatted.length,
+                    );
+                    _bankFeeDisplay = 'Rp$formatted';
+                  });
+                  _isFormattingBankFee = false;
+                  _updateTotalBiaya();
+                },
+                decoration: InputDecoration(
+                  labelText: 'Biaya Admin Bank',
+                  prefixText: 'Rp ',
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+
+        // Row 5: Total Biaya (full width)
+        _buildFeeField('Total Biaya', totalFeesController, Icons.paid),
+        const SizedBox(height: 16),
+
+        // Row 6: Nama Pelanggan and Nomor Tujuan
+        Row(
+          children: [
+            Expanded(
+              child: TextFormField(
+                controller: customerNameController,
+                decoration: InputDecoration(
+                  labelText: 'Nama Pelanggan',
+                  prefixIcon: const Icon(Icons.person_outline),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: TextFormField(
+                controller: destinationNumberController,
+                keyboardType: TextInputType.phone,
+                decoration: InputDecoration(
+                  labelText: 'Nomor Tujuan',
+                  prefixIcon: const Icon(Icons.phone_android),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+
+        // Row 7: Keterangan (full width)
+        TextFormField(
+          controller: keteranganController,
+          maxLines: 3,
+          decoration: InputDecoration(
+            labelText: 'Keterangan',
+            alignLabelWithHint: true,
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+          ),
+        ),
+        const SizedBox(height: 24),
+
+        // Buttons
+        Row(
+          children: [
+            Expanded(
+              child: OutlinedButton(
+                onPressed: _resetForm,
+                style: OutlinedButton.styleFrom(
+                  backgroundColor: Colors.grey[100],
+                  foregroundColor: Colors.red,
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  side: BorderSide(color: Colors.grey[300]!),
+                ),
+                child: const Text(
+                  'Reset',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: ElevatedButton(
+                onPressed: _createTransaction,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.briBlue,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  elevation: 3,
+                ),
+                child: const Text(
+                  'Simpan',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildTransactionList() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Card(
+          elevation: 4,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Daftar Transaksi Hari Ini',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: AppColors.briDarkBlue,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                // Scrollable Table with scroll indicator
+                Container(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.grey[300]!),
+                  ),
+                  child: Column(
+                    children: [
+                      // Scroll hint
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 8,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.blue[50],
+                          borderRadius: const BorderRadius.only(
+                            topLeft: Radius.circular(8),
+                            topRight: Radius.circular(8),
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.swipe_left,
+                              size: 16,
+                              color: Colors.blue[600],
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              'Geser ke kanan untuk melihat kolom lainnya',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.blue[600],
+                                fontStyle: FontStyle.italic,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      // Scrollable content
+                      Scrollbar(
+                        thumbVisibility: true,
+                        trackVisibility: true,
+                        child: SingleChildScrollView(
+                          scrollDirection: Axis.horizontal,
+                          child: ConstrainedBox(
+                            constraints: BoxConstraints(
+                              minWidth: MediaQuery.of(context).size.width - 120,
+                            ),
+                            child: IntrinsicWidth(
+                              child: Column(
+                                children: [
+                                  // Table header
+                                  Container(
+                                    decoration: BoxDecoration(
+                                      color: AppColors.briBlue.withOpacity(0.1),
+                                    ),
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 12,
+                                      horizontal: 16,
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        SizedBox(
+                                          width: 80,
+                                          child: Text(
+                                            'EDC',
+                                            style: TextStyle(
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 12,
+                                            ),
+                                          ),
+                                        ),
+                                        SizedBox(
+                                          width: 140,
+                                          child: Text(
+                                            'NO. TRANS',
+                                            style: TextStyle(
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 12,
+                                            ),
+                                          ),
+                                        ),
+                                        SizedBox(
+                                          width: 100,
+                                          child: Text(
+                                            'KASIR',
+                                            style: TextStyle(
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 12,
+                                            ),
+                                          ),
+                                        ),
+                                        SizedBox(
+                                          width: 120,
+                                          child: Text(
+                                            'LAYANAN',
+                                            style: TextStyle(
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 12,
+                                            ),
+                                          ),
+                                        ),
+                                        SizedBox(
+                                          width: 120,
+                                          child: Text(
+                                            'NO TUJUAN',
+                                            style: TextStyle(
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 12,
+                                            ),
+                                          ),
+                                        ),
+                                        SizedBox(
+                                          width: 120,
+                                          child: Text(
+                                            'NOMINAL',
+                                            style: TextStyle(
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 12,
+                                            ),
+                                          ),
+                                        ),
+                                        SizedBox(
+                                          width: 80,
+                                          child: Text(
+                                            'FEE',
+                                            style: TextStyle(
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 12,
+                                            ),
+                                          ),
+                                        ),
+                                        SizedBox(
+                                          width: 80,
+                                          child: Text(
+                                            'ADMIN',
+                                            style: TextStyle(
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 12,
+                                            ),
+                                          ),
+                                        ),
+                                        SizedBox(
+                                          width: 100,
+                                          child: Text(
+                                            'TAMBAHAN',
+                                            style: TextStyle(
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 12,
+                                            ),
+                                          ),
+                                        ),
+                                        SizedBox(
+                                          width: 150,
+                                          child: Text(
+                                            'NAMA PELANGGAN',
+                                            style: TextStyle(
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 12,
+                                            ),
+                                          ),
+                                        ),
+                                        SizedBox(
+                                          width: 120,
+                                          child: Text(
+                                            'ACTION',
+                                            style: TextStyle(
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 12,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  // Transaction data or placeholder
+                                  _isLoadingTransactions
+                                      ? Container(
+                                          width: double.infinity,
+                                          padding: const EdgeInsets.all(40),
+                                          child: const Center(
+                                            child: CircularProgressIndicator(),
+                                          ),
+                                        )
+                                      : _transactions.isEmpty
+                                      ? Container(
+                                          width: double.infinity,
+                                          padding: const EdgeInsets.symmetric(
+                                            vertical: 40,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: Colors.grey[50],
+                                          ),
+                                          child: Column(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Icon(
+                                                Icons.receipt_long,
+                                                size: 48,
+                                                color: Colors.grey[400],
+                                              ),
+                                              const SizedBox(height: 12),
+                                              Text(
+                                                'Belum ada transaksi hari ini',
+                                                style: TextStyle(
+                                                  fontSize: 16,
+                                                  color: Colors.grey[600],
+                                                ),
+                                              ),
+                                              const SizedBox(height: 8),
+                                              Text(
+                                                'Transaksi yang Anda buat akan muncul di sini',
+                                                style: TextStyle(
+                                                  fontSize: 14,
+                                                  color: Colors.grey[500],
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        )
+                                      : Column(
+                                          children: _transactions.map((
+                                            transaction,
+                                          ) {
+                                            return _buildTransactionRow(
+                                              transaction,
+                                            );
+                                          }).toList(),
+                                        ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
+        Text(
+          'Saldo EDC per Bank',
+          style: TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.bold,
+            color: AppColors.briDarkBlue,
+          ),
+        ),
+        const SizedBox(height: 12),
+        // Saldo EDC per Bank (responsive) with fallback when empty
+        Wrap(
+          spacing: 12,
+          runSpacing: 12,
+          children: (_edcMachines.isNotEmpty
+              ? _edcMachines.map((m) {
+                  final rawBal =
+                      m['saldo'] ?? m['current_balance'] ?? m['balance'];
+                  final display = _formatCurrencyNoDecimals(rawBal);
+                  return SizedBox(
+                    width: 220,
+                    child: _buildBankCard(
+                      (m['name'] ?? 'EDC').toString(),
+                      display,
+                    ),
+                  );
+                }).toList()
+              : [
+                  SizedBox(
+                    width: 220,
+                    child: _buildBankCard('Mesin EDC tidak tersedia', 'Rp0'),
+                  ),
+                ]),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSummaryCard(
+    String title,
+    String value,
+    Color color,
+    IconData icon,
+  ) {
+    return Container(
+      width: 200,
+      child: Card(
+        elevation: 3,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: color.withOpacity(0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(icon, color: color, size: 20),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey[600],
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      value,
+                      style: TextStyle(
+                        color: color,
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildReadOnlyField(String label, String value, IconData icon) {
+    debugPrint('Building readonly field: $label = $value');
+    return TextFormField(
+      initialValue: value,
+      readOnly: true,
+      decoration: InputDecoration(
+        labelText: label,
+        filled: true,
+        fillColor: Colors.grey[50],
+        prefixIcon: Icon(icon, size: 20),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide: BorderSide.none,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFeeField(
+    String label,
+    TextEditingController controller,
+    IconData icon,
+  ) {
+    debugPrint('Building fee field: $label = ${controller.text}');
+    return TextFormField(
+      controller: controller,
+      readOnly: true,
+      decoration: InputDecoration(
+        labelText: label,
+        filled: true,
+        fillColor: Colors.grey[50],
+        prefixIcon: Icon(icon, size: 20),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide: BorderSide.none,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDropdown({
+    required String value,
+    required List<String> items,
+    required String label,
+    required IconData icon,
+    required Function(String?) onChanged,
+  }) {
+    return DropdownButtonFormField<String>(
+      value: items.contains(value) ? value : items.first,
+      items: items
+          .map((e) => DropdownMenuItem(value: e, child: Text(e)))
+          .toList(),
+      onChanged: onChanged,
+      decoration: InputDecoration(
+        labelText: label,
+        prefixIcon: Icon(icon),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide: BorderSide(color: AppColors.briBlue, width: 2),
+        ),
+      ),
+      borderRadius: BorderRadius.circular(8),
+    );
+  }
+
+  Widget _buildBankCard(String title, String balance) => Card(
+    elevation: 3,
+    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+    child: Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.account_balance, size: 16, color: AppColors.briBlue),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  title,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(
+            balance,
+            style: TextStyle(
+              fontSize: 18,
+              color: AppColors.briBlue,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 12),
+          LinearProgressIndicator(
+            value: 0.3,
+            color: AppColors.briBlue,
+            backgroundColor: Colors.grey.shade200,
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            '0 transaksi',
+            style: TextStyle(fontSize: 12, color: Colors.black54),
+          ),
+        ],
+      ),
+    ),
+  );
+
+  Widget _buildTransactionRow(Map<String, dynamic> transaction) {
+    final edcName = transaction['edc_machine']?['name'] ?? '-';
+    final transactionNumber = transaction['transaction_number'] ?? '-';
+    final kasirName = transaction['user']?['name'] ?? '-';
+    final serviceName = transaction['service']?['name'] ?? '-';
+    final targetNumber = transaction['reference_number'] ?? '-';
+    final amount = _formatCurrencyNoDecimals(transaction['amount']);
+    final serviceFee = _formatCurrencyNoDecimals(transaction['service_fee']);
+    final bankFee = _formatCurrencyNoDecimals(transaction['bank_fee']);
+    final extraFee = _formatCurrencyNoDecimals(transaction['extra_fee']);
+    final customerName = transaction['customer_name'] ?? '-';
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.grey[200]!),
+      ),
+      child: Row(
+        children: [
+          // EDC
+          SizedBox(
+            width: 80,
+            child: Text(
+              edcName,
+              style: const TextStyle(fontSize: 14),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          // NO. TRANS
+          SizedBox(
+            width: 140,
+            child: Text(
+              transactionNumber,
+              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          // KASIR
+          SizedBox(
+            width: 100,
+            child: Text(
+              kasirName,
+              style: const TextStyle(fontSize: 14),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          // LAYANAN
+          SizedBox(
+            width: 120,
+            child: Text(
+              serviceName,
+              style: const TextStyle(fontSize: 14),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          // NO TUJUAN
+          SizedBox(
+            width: 120,
+            child: Text(
+              targetNumber,
+              style: const TextStyle(fontSize: 14),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          // NOMINAL
+          SizedBox(
+            width: 120,
+            child: Text(
+              amount,
+              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          // FEE
+          SizedBox(
+            width: 80,
+            child: Text(
+              serviceFee,
+              style: const TextStyle(fontSize: 14),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          // ADMIN
+          SizedBox(
+            width: 80,
+            child: Text(
+              bankFee,
+              style: const TextStyle(fontSize: 14),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          // TAMBAHAN
+          SizedBox(
+            width: 100,
+            child: Text(
+              extraFee,
+              style: const TextStyle(fontSize: 14),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          // NAMA PELANGGAN
+          SizedBox(
+            width: 150,
+            child: Text(
+              customerName,
+              style: const TextStyle(fontSize: 14),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          // ACTION
+          SizedBox(
+            width: 120,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  onPressed: () async {
+                    try {
+                      final dir = await getApplicationDocumentsDirectory();
+                      final file = File(
+                        '${dir.path}/BRILink/printer_settings.json',
+                      );
+                      String printerName = '';
+                      if (await file.exists()) {
+                        final settings =
+                            jsonDecode(await file.readAsString())
+                                as Map<String, dynamic>;
+                        printerName = settings['printer_name'] as String? ?? '';
+                      }
+                      if (printerName.isEmpty) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text('Printer belum dikonfigurasi'),
+                          ),
+                        );
+                        return;
+                      }
+                      final printerController = PrinterController(
+                        printerName: printerName,
+                      );
+                      // Prepare normalized data for printing
+                      int parseRp(String s) {
+                        final cleaned = s
+                            .replaceAll('Rp', '')
+                            .replaceAll('.', '');
+                        return int.tryParse(cleaned) ?? 0;
+                      }
+
+                      final amtVal = parseRp(amount);
+                      final feeVal = parseRp(serviceFee);
+                      final bankVal = parseRp(bankFee);
+                      final extraVal = parseRp(extraFee);
+                      final printData = {
+                        'transaction_number': transaction['transaction_number'],
+                        'created_at':
+                            transaction['created_at'] ??
+                            DateTime.now().toIso8601String(),
+                        'edc_machine': transaction['edc_machine'],
+                        'service': transaction['service'],
+                        'amount': amtVal,
+                        'bank_fee': bankVal,
+                        'service_fee': feeVal,
+                        'extra_fee': extraVal,
+                        'customer_name': transaction['customer_name'],
+                        'reference_number': transaction['reference_number'],
+                        'user': transaction['user'],
+                      };
+                      final success = await printerController.printTransaction(
+                        printData,
+                      );
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            success
+                                ? 'Struk berhasil dicetak'
+                                : 'Gagal mencetak struk',
+                          ),
+                        ),
+                      );
+                    } catch (e) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Error print: $e')),
+                      );
+                    }
+                  },
+                  icon: Icon(Icons.print, size: 16, color: Colors.green[600]),
+                  tooltip: 'Print Struk',
+                  padding: const EdgeInsets.all(4),
+                  constraints: const BoxConstraints(
+                    minWidth: 32,
+                    minHeight: 32,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
