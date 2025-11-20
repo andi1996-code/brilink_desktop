@@ -173,6 +173,16 @@ class AuthProvider extends ChangeNotifier {
     return false;
   }
 
+  /// Update and persist last used base URL (useful before login)
+  Future<void> setLastUsedBaseUrl(String url) async {
+    lastUsedBaseUrl = url;
+    try {
+      apiService.updateBaseUrl(url);
+    } catch (_) {}
+    await _saveSession();
+    notifyListeners();
+  }
+
   /// Save session data to file
   Future<void> _saveSession() async {
     final file = await _getSessionFile();
@@ -201,10 +211,13 @@ class AuthProvider extends ChangeNotifier {
     try {
       await _saveSession();
     } catch (e) {
-      // If saving fails for some reason, fallback to deleting the session file
+      // If saving fails for some reason, attempt to persist only the baseUrl
       try {
-        final file = await _getSessionFile();
-        if (await file.exists()) await file.delete();
+        if (lastUsedBaseUrl != null) {
+          final file = await _getSessionFile();
+          final data = {'baseUrl': lastUsedBaseUrl};
+          await file.writeAsString(jsonEncode(data));
+        }
       } catch (_) {}
     }
 

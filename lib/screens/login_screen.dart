@@ -18,6 +18,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final TextEditingController _serverUrlController = TextEditingController();
   bool _obscurePassword = true;
   final _formKey = GlobalKey<FormState>();
+  VoidCallback? _authListener;
 
   @override
   void initState() {
@@ -26,7 +27,34 @@ class _LoginScreenState extends State<LoginScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final auth = Provider.of<AuthProvider>(context, listen: false);
       _serverUrlController.text = auth.lastUsedBaseUrl ?? '';
+      // Update the field if session loads later
+      _authListener = () {
+        final a = Provider.of<AuthProvider>(context, listen: false);
+        final savedUrl = a.lastUsedBaseUrl ?? '';
+        if (_serverUrlController.text != savedUrl) {
+          setState(() {
+            _serverUrlController.text = savedUrl;
+          });
+        }
+      };
+      auth.addListener(_authListener!);
     });
+  }
+
+  @override
+  void dispose() {
+    if (_authListener != null) {
+      try {
+        Provider.of<AuthProvider>(
+          context,
+          listen: false,
+        ).removeListener(_authListener!);
+      } catch (_) {}
+    }
+    _usernameController.dispose();
+    _passwordController.dispose();
+    _serverUrlController.dispose();
+    super.dispose();
   }
 
   void _onLogin() async {
@@ -217,6 +245,27 @@ class _LoginScreenState extends State<LoginScreen> {
                                   children: [
                                     TextFormField(
                                       controller: _serverUrlController,
+                                      onFieldSubmitted: (value) async {
+                                        final url = value.trim();
+                                        final uri = Uri.tryParse(url);
+                                        if (uri != null && uri.hasScheme) {
+                                          await Provider.of<AuthProvider>(
+                                            context,
+                                            listen: false,
+                                          ).setLastUsedBaseUrl(url);
+                                        }
+                                      },
+                                      onEditingComplete: () async {
+                                        final url = _serverUrlController.text
+                                            .trim();
+                                        final uri = Uri.tryParse(url);
+                                        if (uri != null && uri.hasScheme) {
+                                          await Provider.of<AuthProvider>(
+                                            context,
+                                            listen: false,
+                                          ).setLastUsedBaseUrl(url);
+                                        }
+                                      },
                                       decoration: InputDecoration(
                                         labelText: 'Server URL',
                                         prefixIcon: const Icon(Icons.dns),
