@@ -5,11 +5,17 @@ import 'app_colors.dart';
 import 'providers/auth_provider.dart';
 import 'screens/transaction_screen.dart' as screens;
 import 'screens/login_screen.dart';
+import 'services/fullscreen_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  // Ensure plugin registration before runApp
-  await Future.value();
+
+  // Apply saved fullscreen preference
+  final isFullscreen = await FullscreenService.getFullscreenPreference();
+  if (isFullscreen) {
+    await FullscreenService.enableFullscreen();
+  }
+
   runApp(
     MultiProvider(
       providers: [ChangeNotifierProvider(create: (_) => AuthProvider())],

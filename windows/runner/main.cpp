@@ -26,34 +26,17 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
 
   FlutterWindow window(project);
   
-  // Check if windowed mode is requested via command line
-  bool windowedMode = false;
-  for (const auto& arg : command_line_arguments) {
-    if (arg == "--windowed" || arg == "-w") {
-      windowedMode = true;
-      break;
-    }
-  }
-  
-  // Get screen dimensions
-  int screenWidth = GetSystemMetrics(SM_CXSCREEN);
-  int screenHeight = GetSystemMetrics(SM_CYSCREEN);
-  
-  Win32Window::Point origin(windowedMode ? Win32Window::Point(100, 100) : Win32Window::Point(0, 0));
-  Win32Window::Size size(windowedMode ? Win32Window::Size(1280, 720) : Win32Window::Size(screenWidth, screenHeight));
+  // Default windowed mode (Flutter will handle fullscreen via method channel)
+  Win32Window::Point origin(100, 100);
+  Win32Window::Size size(1280, 720);
   
   if (!window.Create(L"BRILink Desktop", origin, size)) {
     return EXIT_FAILURE;
   }
   window.SetQuitOnClose(true);
   
-  // Enable fullscreen only if not in windowed mode
-  if (!windowedMode) {
-    window.EnableFullscreen();
-  } else {
-    // Just show normally in windowed mode
-    window.Show();
-  }
+  // Show window normally - Flutter will call fullscreen if needed
+  window.Show();
 
   ::MSG msg;
   while (::GetMessage(&msg, nullptr, 0, 0)) {

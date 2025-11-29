@@ -17,6 +17,9 @@ class FlutterWindow : public Win32Window {
 
   // Enable borderless fullscreen mode
   void EnableFullscreen();
+  
+  // Disable fullscreen mode (restore normal window)
+  void DisableFullscreen();
 
  protected:
   // Win32Window:

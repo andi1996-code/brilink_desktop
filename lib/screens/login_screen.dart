@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../app_colors.dart';
 import '../providers/auth_provider.dart';
+import '../services/fullscreen_service.dart';
 
 /// LoginScreen with two-column layout for desktop
 class LoginScreen extends StatefulWidget {
@@ -17,12 +18,14 @@ class _LoginScreenState extends State<LoginScreen> {
   final TextEditingController _passwordController = TextEditingController();
   final TextEditingController _serverUrlController = TextEditingController();
   bool _obscurePassword = true;
+  bool _isFullscreen = false;
   final _formKey = GlobalKey<FormState>();
   VoidCallback? _authListener;
 
   @override
   void initState() {
     super.initState();
+    _loadFullscreenPreference();
     // Set default server URL dari yang terakhir digunakan, atau kosongkan
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final auth = Provider.of<AuthProvider>(context, listen: false);
@@ -38,6 +41,13 @@ class _LoginScreenState extends State<LoginScreen> {
         }
       };
       auth.addListener(_authListener!);
+    });
+  }
+
+  Future<void> _loadFullscreenPreference() async {
+    final isFullscreen = await FullscreenService.getFullscreenPreference();
+    setState(() {
+      _isFullscreen = isFullscreen;
     });
   }
 
@@ -369,6 +379,71 @@ class _LoginScreenState extends State<LoginScreen> {
                                         }
                                         return null;
                                       },
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(height: 20),
+                              // Fullscreen Toggle
+                              Container(
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: AppColors.briBlue.withOpacity(0.05),
+                                  borderRadius: BorderRadius.circular(10),
+                                  border: Border.all(
+                                    color: AppColors.briBlue.withOpacity(0.2),
+                                  ),
+                                ),
+                                child: Row(
+                                  children: [
+                                    Icon(
+                                      Icons.fullscreen,
+                                      color: AppColors.briBlue,
+                                      size: 24,
+                                    ),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            'Mode Fullscreen',
+                                            style: TextStyle(
+                                              fontWeight: FontWeight.bold,
+                                              color: AppColors.briBlue,
+                                              fontSize: 14,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 2),
+                                          Text(
+                                            _isFullscreen
+                                                ? 'Aplikasi akan buka layar penuh'
+                                                : 'Aplikasi buka dalam window',
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              color: Colors.grey[600],
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    Switch(
+                                      value: _isFullscreen,
+                                      onChanged: (value) async {
+                                        setState(() {
+                                          _isFullscreen = value;
+                                        });
+                                        await FullscreenService.setFullscreenPreference(
+                                          value,
+                                        );
+                                        if (value) {
+                                          await FullscreenService.enableFullscreen();
+                                        } else {
+                                          await FullscreenService.disableFullscreen();
+                                        }
+                                      },
+                                      activeColor: AppColors.briBlue,
                                     ),
                                   ],
                                 ),

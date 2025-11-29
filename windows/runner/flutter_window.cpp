@@ -3,6 +3,8 @@
 #include <optional>
 
 #include "flutter/generated_plugin_registrant.h"
+#include <flutter/method_channel.h>
+#include <flutter/standard_method_codec.h>
 
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
     : project_(project) {}
@@ -34,6 +36,33 @@ void FlutterWindow::EnableFullscreen() {
   }
 }
 
+void FlutterWindow::DisableFullscreen() {
+  HWND hwnd = GetHandle();
+  if (hwnd) {
+    // Get current window style
+    LONG style = GetWindowLong(hwnd, GWL_STYLE);
+    
+    // Restore border, title bar, and other decorations
+    style |= (WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU);
+    
+    // Set the new style
+    SetWindowLong(hwnd, GWL_STYLE, style);
+    
+    // Set window to normal size (1280x720)
+    int windowWidth = 1280;
+    int windowHeight = 720;
+    int posX = 100;
+    int posY = 100;
+    
+    // Position and size the window
+    SetWindowPos(hwnd, HWND_TOP, posX, posY, windowWidth, windowHeight, 
+                 SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+    
+    // Show as normal window
+    ShowWindow(hwnd, SW_NORMAL);
+  }
+}
+
 bool FlutterWindow::OnCreate() {
   if (!Win32Window::OnCreate()) {
     return false;
@@ -51,6 +80,26 @@ bool FlutterWindow::OnCreate() {
   }
   RegisterPlugins(flutter_controller_->engine());
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
+
+  // Setup method channel for fullscreen control
+  flutter::MethodChannel<> channel(
+      flutter_controller_->engine()->messenger(), 
+      "desktop_flutter_brilnik/fullscreen",
+      &flutter::StandardMethodCodec::GetInstance());
+  
+  channel.SetMethodCallHandler(
+      [this](const flutter::MethodCall<>& call,
+             std::unique_ptr<flutter::MethodResult<>> result) {
+        if (call.method_name() == "enableFullscreen") {
+          this->EnableFullscreen();
+          result->Success();
+        } else if (call.method_name() == "disableFullscreen") {
+          this->DisableFullscreen();
+          result->Success();
+        } else {
+          result->NotImplemented();
+        }
+      });
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
     this->Show();
